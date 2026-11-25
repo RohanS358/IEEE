@@ -2,7 +2,7 @@
 // A form generated from the shape of the content itself: every string, number, list and nested object in
 // SiteContent gets an input, so anything added to the content model is editable here without more UI code.
 import { useEffect, useRef, useState, useTransition } from "react";
-import { FONTS, type SiteContent } from "@/lib/content";
+import { FONTS, merge, type SiteContent } from "@/lib/content";
 import { logout, saveContent } from "./actions";
 
 type Json = string | number | boolean | null | Json[] | { [k: string]: Json };
@@ -215,11 +215,74 @@ function PreviewFrame({ section, content }: { section: string; content: Obj }) {
   );
 }
 
+const download = (data: unknown, name: string) => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+
+// Paste JSON to change any part of the site. Only the keys you include change; lists inside them are replaced whole.
+function JsonPanel({ content, defaults, onApply }: { content: Obj; defaults: SiteContent; onApply: (next: Obj, save: boolean) => void }) {
+  const [text, setText] = useState(() => JSON.stringify(content, null, 2));
+  const [note, setNote] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  const parse = (): Obj | null => {
+    let v: unknown;
+    try { v = JSON.parse(text); } catch (e) { setNote(`Invalid JSON: ${e instanceof Error ? e.message : "could not parse"}`); return null; }
+    if (!v || typeof v !== "object" || Array.isArray(v)) { setNote("The JSON must be an object like { \"hero\": { ... } }."); return null; }
+    const unknown = Object.keys(v).filter((k) => !(k in defaults));
+    if (unknown.length) { setNote(`Unknown top-level key${unknown.length > 1 ? "s" : ""}: ${unknown.join(", ")}. Valid keys: ${Object.keys(defaults).join(", ")}.`); return null; }
+    return v as Obj;
+  };
+  const apply = (save: boolean) => {
+    const v = parse();
+    if (!v) return;
+    onApply(merge(content, v) as Obj, save);
+    setNote(save ? "Applied and saved." : "Applied to the editor. Check the other tabs, then Save changes.");
+  };
+
+  return (
+    <div className="space-y-5">
+      <p className="text-sm leading-6">
+        Paste JSON to change the site in one go. Include only the parts you want to change, for example{" "}
+        <code className="rounded bg-black/30 px-1.5 py-0.5 text-white">{`{ "hero": { "slogan": ["Build.", "Ship."] } }`}</code>. Lists
+        (slogan, events, team groups…) are replaced whole, so include every item you want to keep. Download the current JSON to see the exact format.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" className={btn} onClick={() => { setText(JSON.stringify(content, null, 2)); setNote("Loaded the current content."); }}>Load current</button>
+        <button type="button" className={btn} onClick={() => { navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }}>{copied ? "Copied" : "Copy"}</button>
+        <button type="button" className={btn} onClick={() => download(content, "site-content.json")}>Download current</button>
+        <button type="button" className={btn} onClick={() => download(defaults, "site-content-original.json")}>Download original format</button>
+      </div>
+      <textarea
+        value={text}
+        onChange={(e) => { setText(e.target.value); setNote(""); }}
+        spellCheck={false}
+        aria-label="Site content JSON"
+        className={input + " h-[60vh] min-h-80 resize-y font-mono text-xs leading-5"}
+      />
+      {note && <p role="status" className={`text-sm ${/^(Invalid|The JSON|Unknown)/.test(note) ? "text-[#ff8a9b]" : "text-[#6dcff6]"}`}>{note}</p>}
+      <div className="flex flex-wrap gap-2">
+        <button type="button" onClick={() => apply(false)} className="rounded-full border border-[#6dcff6]/60 px-5 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#b9e5fa]/15">
+          Apply to editor
+        </button>
+        <button type="button" onClick={() => apply(true)} className="rounded-full bg-white px-5 py-2 text-sm font-semibold text-[#002855] transition-colors hover:bg-[#b9e5fa]">
+          Apply and save
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function Editor({ initial, defaults }: { initial: SiteContent; defaults: SiteContent }) {
   const [content, setContent] = useState<Obj>(initial as unknown as Obj);
   const [saved, setSaved] = useState(JSON.stringify(initial));
-  const tabs = Object.keys(content);
+  const tabs = [...Object.keys(content), "json"];
   const [tab, setTab] = useState(tabs[0]);
+  const isJson = tab === "json";
   const [msg, setMsg] = useState("");
   const [pending, start] = useTransition();
   const dirty = JSON.stringify(content) !== saved;
@@ -231,25 +294,20 @@ export default function Editor({ initial, defaults }: { initial: SiteContent; de
     return () => window.removeEventListener("beforeunload", warn);
   }, [dirty]);
 
-  const save = () =>
+  const persist = (c: Obj) =>
     start(async () => {
-      const body = JSON.stringify(content);
+      const body = JSON.stringify(c);
       const r = await saveContent(body);
       if (r.ok) { setSaved(body); setMsg("Saved. The site is updated."); } else setMsg(r.error ?? "Could not save.");
     });
+  const save = () => persist(content);
 
   const importFile = async (file?: File) => {
     if (!file) return;
     try { setContent(JSON.parse(await file.text())); setMsg("Imported. Review it, then Save."); } catch { setMsg("That file is not valid JSON."); }
   };
 
-  const exportJson = () => {
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([JSON.stringify(content, null, 2)], { type: "application/json" }));
-    a.download = "site-content.json";
-    a.click();
-    URL.revokeObjectURL(a.href);
-  };
+  const exportJson = () => download(content, "site-content.json");
 
   return (
     <div className="min-h-screen">
@@ -291,30 +349,45 @@ export default function Editor({ initial, defaults }: { initial: SiteContent; de
                 t === tab ? "bg-white text-[#002855]" : "text-[#b9e5fa] hover:bg-[#b9e5fa]/10"
               }`}
             >
-              {human(t)}
+              {t === "json" ? "JSON" : human(t)}
             </button>
           ))}
         </nav>
 
-        <main className="order-3 min-w-0 pb-24 xl:order-2">
+        <main className={`order-3 min-w-0 pb-24 xl:order-2 ${isJson ? "xl:col-span-2" : ""}`}>
           <div className="mb-6 flex items-end justify-between gap-4">
-            <h2 className="text-3xl font-semibold tracking-tight text-white sm:text-4xl">{human(tab)}</h2>
-            <button
-              type="button"
-              className={btn}
-              onClick={() => confirm(`Reset "${human(tab)}" to the original content?`) && setContent({ ...content, [tab]: structuredClone(defaults[tab as keyof SiteContent]) as unknown as Json })}
-            >
-              Reset to defaults
-            </button>
+            <h2 className="text-3xl font-semibold tracking-tight text-white sm:text-4xl">{isJson ? "JSON" : human(tab)}</h2>
+            {!isJson && (
+              <button
+                type="button"
+                className={btn}
+                onClick={() => confirm(`Reset "${human(tab)}" to the original content?`) && setContent({ ...content, [tab]: structuredClone(defaults[tab as keyof SiteContent]) as unknown as Json })}
+              >
+                Reset to defaults
+              </button>
+            )}
           </div>
-          <div key={tab}>
-            <Fields top value={content[tab] as Obj} onChange={(v) => setContent({ ...content, [tab]: v })} />
-          </div>
+          {isJson ? (
+            <JsonPanel
+              content={content}
+              defaults={defaults}
+              onApply={(next, andSave) => {
+                setContent(next);
+                if (andSave) persist(next);
+              }}
+            />
+          ) : (
+            <div key={tab}>
+              <Fields top value={content[tab] as Obj} onChange={(v) => setContent({ ...content, [tab]: v })} />
+            </div>
+          )}
         </main>
 
-        <aside aria-label="Live preview" className="order-2 min-w-0 xl:order-3">
-          <PreviewFrame section={tab} content={content} />
-        </aside>
+        {!isJson && (
+          <aside aria-label="Live preview" className="order-2 min-w-0 xl:order-3">
+            <PreviewFrame section={tab} content={content} />
+          </aside>
+        )}
       </div>
     </div>
   );
