@@ -255,7 +255,7 @@ export default function TeamStack({
               {here && (
                 <Lanyard
                   className="h-full"
-                  frontImage={c.image || `/team/${c.slug}.svg`}
+                  frontImage={c.image || `/api/badge?${new URLSearchParams({ slug: c.slug, role: groups[c.g].title, name: c.name })}`}
                   backImage="/team/back.svg"
                   strapImage="/team/strap.svg"
                   cardColor={theme.teamBackground[0]}
