@@ -21,8 +21,9 @@ export async function POST(request: Request) {
   const base = file.name.replace(/\.[^.]+$/, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "image";
   const name = `${base}-${Date.now().toString(36)}.${ext}`;
   if (blobEnabled()) {
-    const blob = await put(`uploads/${name}`, file, { access: "public", addRandomSuffix: false, contentType: file.type });
-    return Response.json({ url: blob.url });
+    // The store is private, so images are served through /api/media.
+    await put(`uploads/${name}`, file, { access: "private", addRandomSuffix: false, contentType: file.type });
+    return Response.json({ url: `/api/media/uploads/${name}` });
   }
   await fs.mkdir(path.join(process.cwd(), "public", "uploads"), { recursive: true });
   await fs.writeFile(path.join(process.cwd(), "public", "uploads", name), Buffer.from(await file.arrayBuffer()));

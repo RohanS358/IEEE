@@ -1,7 +1,7 @@
 // Persistence for the content document: Vercel Blob when BLOB_READ_WRITE_TOKEN is set, a local file otherwise.
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { head, put } from "@vercel/blob";
+import { get, put } from "@vercel/blob";
 import { cacheTag } from "next/cache";
 import { defaultContent, merge, type SiteContent } from "./content";
 
@@ -12,9 +12,8 @@ export const blobEnabled = () => !!process.env.BLOB_READ_WRITE_TOKEN;
 async function readRaw(): Promise<unknown> {
   try {
     if (blobEnabled()) {
-      const { url } = await head(KEY); // throws when nothing has been saved yet
-      const res = await fetch(`${url}?t=${Date.now()}`, { cache: "no-store" }); // the query dodges the blob CDN cache
-      return res.ok ? await res.json() : null;
+      const res = await get(KEY, { access: "private", useCache: false }); // null when nothing has been saved yet
+      return res?.stream ? await new Response(res.stream).json() : null;
     }
     return JSON.parse(await fs.readFile(FILE, "utf8"));
   } catch {
@@ -37,7 +36,7 @@ export async function readContent(): Promise<SiteContent> {
 export async function writeContent(content: SiteContent): Promise<void> {
   const json = JSON.stringify(content, null, 2);
   if (blobEnabled()) {
-    await put(KEY, json, { access: "public", addRandomSuffix: false, allowOverwrite: true, contentType: "application/json", cacheControlMaxAge: 60 });
+    await put(KEY, json, { access: "private", addRandomSuffix: false, allowOverwrite: true, contentType: "application/json" });
     return;
   }
   await fs.mkdir(path.dirname(FILE), { recursive: true });
